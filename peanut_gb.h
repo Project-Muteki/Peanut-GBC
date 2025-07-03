@@ -2016,6 +2016,10 @@ void __gb_draw_line(struct gb_s *gb)
 					|| gb->hram_io[IO_LY] + 16 < OY)
 				continue;
 
+#if PEANUT_FULL_GBC_SUPPORT
+			if (!gb->cgb.cgbMode)
+			{
+#endif
 			struct sprite_data current;
 
 			current.sprite_number = sprite_number;
@@ -2037,9 +2041,19 @@ void __gb_draw_line(struct gb_s *gb)
 			if(number_of_sprites <= MAX_SPRITES_LINE)
 				number_of_sprites++;
 			sprites_to_render[place] = current;
+#if PEANUT_FULL_GBC_SUPPORT
+			}
+			else
+			{
+				// CGB does not care about the X coordinate of the sprite when it comes to render priority, only the OAM order.
+				// Skip the reordering and just fill sprites_to_render until it is full.
+				if (number_of_sprites >= MAX_SPRITES_LINE) continue;
+				sprites_to_render[number_of_sprites].sprite_number = sprite_number;
+				sprites_to_render[number_of_sprites].x = OX;
+				number_of_sprites++;
+			}
+#endif
 		}
-		if(number_of_sprites > MAX_SPRITES_LINE)
-			number_of_sprites = MAX_SPRITES_LINE;
 #endif
 
 		/* Render each sprite, from low priority to high priority. */
