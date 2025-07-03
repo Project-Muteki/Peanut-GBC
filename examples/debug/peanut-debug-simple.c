@@ -12,19 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "SDL.h"
-
 #define ENABLE_LCD 1
 #define ENABLE_SOUND 0
 
 #include "../../peanut_gb.h"
-
-const uint16_t lcd_palette[3][4] =
-{
-	{ 0x7FFF, 0x5294, 0x294A, 0x0000 },
-	{ 0x7FFF, 0x5294, 0x294A, 0x0000 },
-	{ 0x7FFF, 0x5294, 0x294A, 0x0000 }
-};
 
 struct priv_t
 {
@@ -32,6 +23,7 @@ struct priv_t
 	uint8_t *rom;
 	/* Pointer to allocated memory holding save file. */
 	uint8_t *cart_ram;
+	FILE *log;
 	uint16_t fb[LCD_HEIGHT][LCD_WIDTH];
 };
 
@@ -162,6 +154,8 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t val)
 
 	fprintf(stderr, "Error %d occurred: %s at %04X\n. Exiting.\n",
 			gb_err, gb_err_str[gb_err], val);
+	
+	fflush(priv->log);
 
 	/* Free memory and then exit. */
 	free(priv->cart_ram);
@@ -176,14 +170,6 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t val)
 void lcd_draw_line(struct gb_s *gb, const uint8_t pixels[160],
 		   const uint_fast8_t line)
 {
-	struct priv_t *priv = gb->direct.priv;
-
-	for(unsigned int x = 0; x < LCD_WIDTH; x++)
-	{
-		priv->fb[line][x] = lcd_palette
-				    [(pixels[x] & LCD_PALETTE_ALL) >> 4]
-				    [pixels[x] & 3];
-	}
 }
 #endif
 
@@ -191,17 +177,9 @@ int main(int argc, char **argv)
 {
 	struct gb_s gb;
 	struct priv_t priv;
-	const unsigned int height = 144;
-	const unsigned int width = 160;
 	unsigned int running = 1;
-	SDL_Window *window;
-	SDL_Renderer *renderer;
-	SDL_Texture *texture;
-	SDL_Event event;
-	uint32_t new_ticks, old_ticks;
 	char *save_file_name;
 	enum gb_init_error_e ret;
-	unsigned int fast_mode = 0;
 	unsigned int debug_mode = 1;
 
 	/* Make sure a file name is given. */
@@ -254,6 +232,7 @@ int main(int argc, char **argv)
 		save_file_name = argv[2];
 
 	/* TODO: Sanity check input GB file. */
+	priv.log = fopen("log.txt", "w");
 
 	/* Initialise emulator context. */
 	ret = gb_init(&gb, &gb_rom_read, &gb_cart_ram_read, &gb_cart_ram_write,
@@ -271,111 +250,12 @@ int main(int argc, char **argv)
 #if ENABLE_LCD
 	gb_init_lcd(&gb, &lcd_draw_line);
 #endif
-	/* Initialise frontend implementation, in this case, SDL2. */
-	if(SDL_Init(SDL_INIT_VIDEO) < 0)
-	{
-		printf("Could not initialise SDL: %s\n", SDL_GetError());
-		return EXIT_FAILURE;
-	}
-
-	window = SDL_CreateWindow("DMG Emulator",
-			SDL_WINDOWPOS_UNDEFINED,
-			SDL_WINDOWPOS_UNDEFINED,
-			width, height,
-			0);
-	if(window == NULL)
-	{
-		printf("Could not create window: %s\n", SDL_GetError());
-		return EXIT_FAILURE;
-	}
-
-	renderer = SDL_CreateRenderer(window, -1, 0);
-	if(renderer == NULL)
-	{
-		printf("Could not create renderer: %s\n", SDL_GetError());
-		return EXIT_FAILURE;
-	}
-
-	if(SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255) < 0)
-	{
-		printf("Renderer could not draw color: %s\n", SDL_GetError());
-		return EXIT_FAILURE;
-	}
-
-	if(SDL_RenderClear(renderer) < 0)
-	{
-		printf("Renderer could not clear: %s\n", SDL_GetError());
-		return EXIT_FAILURE;
-	}
-	SDL_RenderPresent(renderer);
-
-	texture = SDL_CreateTexture(renderer,
-			SDL_PIXELFORMAT_RGB565,
-			SDL_TEXTUREACCESS_STREAMING,
-			width, height);
-	if(texture == NULL)
-	{
-		printf("Texture could not be created: %s\n", SDL_GetError());
-		return EXIT_FAILURE;
-	}
-
-	new_ticks = SDL_GetTicks();
 
 	uint8_t pc_log[2] = { 0xFF, 0xFF };
 	bool pc_log_count = false;
 
 	while(running)
 	{
-		int32_t delay;
-
-		/* TODO: Get joypad input. */
-		while(SDL_PollEvent(&event))
-		{
-			switch(event.type)
-			{
-				case SDL_QUIT:
-					running = 0;
-					break;
-
-				case SDL_KEYDOWN:
-					switch(event.key.keysym.sym)
-					{
-						case SDLK_RETURN: gb.direct.joypad &= ~JOYPAD_START; break;
-						case SDLK_BACKSPACE: gb.direct.joypad &= ~JOYPAD_SELECT; break;
-						case SDLK_z: gb.direct.joypad &= ~JOYPAD_A; break;
-						case SDLK_x: gb.direct.joypad &= ~JOYPAD_B; break;
-						case SDLK_UP: gb.direct.joypad &= ~JOYPAD_UP; break;
-						case SDLK_DOWN: gb.direct.joypad &= ~JOYPAD_DOWN; break;
-						case SDLK_LEFT: gb.direct.joypad &= ~JOYPAD_LEFT; break;
-						case SDLK_RIGHT: gb.direct.joypad &= ~JOYPAD_RIGHT; break;
-						case SDLK_SPACE: fast_mode = !fast_mode; break;
-						case SDLK_d: debug_mode = !debug_mode; break;
-						default: break;
-					}
-					break;
-				case SDL_KEYUP:
-					switch(event.key.keysym.sym)
-					{
-						case SDLK_RETURN: gb.direct.joypad |= JOYPAD_START; break;
-						case SDLK_BACKSPACE: gb.direct.joypad |= JOYPAD_SELECT; break;
-						case SDLK_z: gb.direct.joypad |= JOYPAD_A; break;
-						case SDLK_x: gb.direct.joypad |= JOYPAD_B; break;
-						case SDLK_UP: gb.direct.joypad |= JOYPAD_UP; break;
-						case SDLK_DOWN: gb.direct.joypad |= JOYPAD_DOWN; break;
-						case SDLK_LEFT: gb.direct.joypad |= JOYPAD_LEFT; break;
-						case SDLK_RIGHT: gb.direct.joypad |= JOYPAD_RIGHT; break;
-						default: break;
-					}
-					break;
-			}
-			if(event.type == SDL_QUIT)
-				running = 0;
-		}
-
-		/* Calculate the time taken to draw frame, then later add a delay to cap
-		 * at 60 fps. */
-		old_ticks = SDL_GetTicks();
-
 		/* Execute CPU cycles until the screen has to be redrawn. */
 		//gb_run_frame(&gb);
 		
@@ -391,20 +271,22 @@ int main(int argc, char **argv)
 				continue;
 
 			/* Debugging */
-			printf("OP:%02X%s PC:%04X A:%02X BC:%04X DE:%04X SP:%04X HL:%04X ",
+			fprintf(priv.log, "OP:%02X%s PC:%04X AF:%02X%02X BC:%04X DE:%04X SP:%04X HL:%04X ",
 					__gb_read(&gb, gb.cpu_reg.pc.reg),
 					gb.gb_halt ? "(HALTED)" : "",
 					gb.cpu_reg.pc.reg,
-					gb.cpu_reg.a,
+					gb.cpu_reg.a, gb.cpu_reg.f.reg,
 					gb.cpu_reg.bc.reg,
 					gb.cpu_reg.de.reg,
 					gb.cpu_reg.sp.reg,
 					gb.cpu_reg.hl.reg);
-			printf("LCD Mode: %s, LCD Power: %s ",
-					lcd_mode_str[gb.hram_io[IO_STAT] & STAT_MODE],
-					(gb.hram_io[IO_LCDC] >> 7) ? "ON" : "OFF");
-			printf("ROM%d", gb.selected_rom_bank);
-			printf("\n");
+			fprintf(priv.log, "LCD Mode: %02X (%s), LCD Power: %02X (%s) ",
+					gb.hram_io[IO_STAT], lcd_mode_str[gb.hram_io[IO_STAT] & STAT_MODE],
+					gb.hram_io[IO_LCDC], (gb.hram_io[IO_LCDC] >> 7) ? "ON" : "OFF");
+			fprintf(priv.log, "IF: %02X, IE: %02X ",
+				gb.hram_io[IO_IF], gb.hram_io[IO_IE]);
+			fprintf(priv.log, "ROM%d", gb.selected_rom_bank);
+			fprintf(priv.log, "\n");
 
 			pc_log[pc_log_count] = __gb_read(&gb, gb.cpu_reg.pc.reg);
 			pc_log_count = !pc_log_count;
@@ -414,32 +296,17 @@ int main(int argc, char **argv)
 				goto quit;
 			}
 		}
-
-		/* Copy frame buffer to SDL screen. */
-		SDL_UpdateTexture(texture, NULL, priv.fb, width * sizeof(uint16_t));
-		SDL_RenderClear(renderer);
-		SDL_RenderCopy(renderer, texture, NULL, NULL);
-		SDL_RenderPresent(renderer);
-
-		/* Use a delay that will draw the screen at a rate of 59.73 Hz. */
-		new_ticks = SDL_GetTicks();
-
-		if(fast_mode)
-			continue;
-
-		delay = 17 - (new_ticks - old_ticks);
-		SDL_Delay(delay > 0 ? delay : 0);
 	}
 
 quit:
-	SDL_Quit();
-
+	fclose(priv.log);
 	/* Record save file. */
 	write_cart_ram_file(save_file_name, &priv.cart_ram, gb_get_save_size(&gb));
 
 	free(priv.rom);
 	free(priv.cart_ram);
-	free(save_file_name);
+	if(argc == 2)
+		free(save_file_name);
 
 	return EXIT_SUCCESS;
 }

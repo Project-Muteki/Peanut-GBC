@@ -17,6 +17,9 @@
 #	include "minigb_apu/minigb_apu.h"
 #endif
 
+uint8_t audio_read(uint16_t addr);
+void audio_write(uint16_t addr, uint8_t val);
+
 #include "../../peanut_gb.h"
 
 enum {
@@ -32,13 +35,17 @@ struct priv_t
 	uint8_t *rom;
 	/* Pointer to allocated memory holding save file. */
 	uint8_t *cart_ram;
-	/* Pointer to boot ROM binary. */
+	/* Size of the cart_ram in bytes. */
+	size_t save_size;
+	/* Pointer to boot ROM binary if available. */
 	uint8_t *bootrom;
 
 	/* Colour palette for each BG, OBJ0, and OBJ1. */
 	uint16_t selected_palette[3][4];
 	uint16_t fb[LCD_HEIGHT][LCD_WIDTH];
 };
+
+static struct minigb_apu_ctx apu;
 
 /**
  * Returns a byte from the ROM file at the given address.
@@ -72,6 +79,21 @@ uint8_t gb_bootrom_read(struct gb_s *gb, const uint_fast16_t addr)
 {
 	const struct priv_t * const p = gb->direct.priv;
 	return p->bootrom[addr];
+}
+
+uint8_t audio_read(uint16_t addr)
+{
+	return minigb_apu_audio_read(&apu, addr);
+}
+
+void audio_write(uint16_t addr, uint8_t val)
+{
+	minigb_apu_audio_write(&apu, addr, val);
+}
+
+void audio_callback(void *ptr, uint8_t *data, int len)
+{
+	minigb_apu_audio_callback(&apu, (void *)data);
 }
 
 void read_cart_ram_file(const char *save_file_name, uint8_t **dest,
@@ -145,7 +167,7 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
 		"INVALID OPCODE",
 		"INVALID READ",
 		"INVALID WRITE",
-		"HALT FOREVER"
+		""
 	};
 	struct priv_t *priv = gb->direct.priv;
 	char error_msg[256];
@@ -153,7 +175,7 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
 	uint8_t instr_byte;
 
 	/* Record save file. */
-	write_cart_ram_file("recovery.sav", &priv->cart_ram, gb_get_save_size(gb));
+	write_cart_ram_file("recovery.sav", &priv->cart_ram, priv->save_size);
 
 	if(addr >= 0x4000 && addr < 0x8000)
 	{
@@ -540,7 +562,7 @@ void manual_assign_palette(struct priv_t *priv, uint8_t selection)
  * Draws scanline into framebuffer.
  */
 void lcd_draw_line(struct gb_s *gb, const uint8_t pixels[160],
-		   const uint_least8_t line)
+		   const uint_fast8_t line)
 {
 	struct priv_t *priv = gb->direct.priv;
 
@@ -635,7 +657,9 @@ int main(int argc, char **argv)
 	SDL_LogSetPriority(LOG_CATERGORY_PEANUTSDL, SDL_LOG_PRIORITY_INFO);
 
 	/* Enable Hi-DPI to stop blurry game image. */
+#ifdef SDL_HINT_WINDOWS_DPI_AWARENESS
 	SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
 
 	/* Initialise frontend implementation, in this case, SDL2. */
 	if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) < 0)
@@ -688,7 +712,7 @@ int main(int argc, char **argv)
 					break;
 			}
 		} while(rom_file_name == NULL);
-			
+
 		break;
 
 	case 2:
@@ -821,7 +845,19 @@ int main(int argc, char **argv)
 	}
 
 	/* Load Save File. */
-	read_cart_ram_file(save_file_name, &priv.cart_ram, gb_get_save_size(&gb));
+	if(gb_get_save_size_s(&gb, &priv.save_size) < 0)
+	{
+		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
+				SDL_LOG_PRIORITY_CRITICAL,
+				"Unable to get save size: %s",
+				SDL_GetError());
+		ret = EXIT_FAILURE;
+		goto out;
+	}
+
+	/* Only attempt to load a save file if the ROM actually supports saves.*/
+	if(priv.save_size > 0)
+		read_cart_ram_file(save_file_name, &priv.cart_ram, priv.save_size);
 
 	/* Set the RTC of the game cartridge. Only used by games that support it. */
 	{
@@ -890,7 +926,7 @@ int main(int argc, char **argv)
 			exit(EXIT_FAILURE);
 		}
 
-		audio_init();
+		minigb_apu_audio_init(&apu);
 		SDL_PauseAudioDevice(dev, 0);
 	}
 #endif
@@ -1024,39 +1060,76 @@ int main(int argc, char **argv)
 				goto quit;
 
 			case SDL_CONTROLLERBUTTONDOWN:
+				switch(event.cbutton.button)
+				{
+				case SDL_CONTROLLER_BUTTON_A:
+					gb.direct.joypad &= ~JOYPAD_A;
+					break;
+
+				case SDL_CONTROLLER_BUTTON_B:
+					gb.direct.joypad &= ~JOYPAD_B;
+					break;
+
+				case SDL_CONTROLLER_BUTTON_BACK:
+					gb.direct.joypad &= ~JOYPAD_SELECT;
+					break;
+
+				case SDL_CONTROLLER_BUTTON_START:
+					gb.direct.joypad &= ~JOYPAD_START;
+					break;
+
+				case SDL_CONTROLLER_BUTTON_DPAD_UP:
+					gb.direct.joypad &= ~JOYPAD_UP;
+					break;
+
+				case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+					gb.direct.joypad &= ~JOYPAD_RIGHT;
+					break;
+
+				case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+					gb.direct.joypad &= ~JOYPAD_DOWN;
+					break;
+
+				case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+					gb.direct.joypad &= ~JOYPAD_LEFT;
+					break;
+				}
+
+				break;
+
 			case SDL_CONTROLLERBUTTONUP:
 				switch(event.cbutton.button)
 				{
 				case SDL_CONTROLLER_BUTTON_A:
-					gb.direct.joypad_bits.a = !event.cbutton.state;
+					gb.direct.joypad |= JOYPAD_A;
 					break;
 
 				case SDL_CONTROLLER_BUTTON_B:
-					gb.direct.joypad_bits.b = !event.cbutton.state;
+					gb.direct.joypad |= JOYPAD_B;
 					break;
 
 				case SDL_CONTROLLER_BUTTON_BACK:
-					gb.direct.joypad_bits.select = !event.cbutton.state;
+					gb.direct.joypad |= JOYPAD_SELECT;
 					break;
 
 				case SDL_CONTROLLER_BUTTON_START:
-					gb.direct.joypad_bits.start = !event.cbutton.state;
+					gb.direct.joypad |= JOYPAD_START;
 					break;
 
 				case SDL_CONTROLLER_BUTTON_DPAD_UP:
-					gb.direct.joypad_bits.up = !event.cbutton.state;
+					gb.direct.joypad |= JOYPAD_UP;
 					break;
 
 				case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-					gb.direct.joypad_bits.right = !event.cbutton.state;
+					gb.direct.joypad |= JOYPAD_RIGHT;
 					break;
 
 				case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-					gb.direct.joypad_bits.down = !event.cbutton.state;
+					gb.direct.joypad |= JOYPAD_DOWN;
 					break;
 
 				case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-					gb.direct.joypad_bits.left = !event.cbutton.state;
+					gb.direct.joypad |= JOYPAD_LEFT;
 					break;
 				}
 
@@ -1066,35 +1139,43 @@ int main(int argc, char **argv)
 				switch(event.key.keysym.sym)
 				{
 				case SDLK_RETURN:
-					gb.direct.joypad_bits.start = 0;
+					gb.direct.joypad &= ~JOYPAD_START;
 					break;
 
 				case SDLK_BACKSPACE:
-					gb.direct.joypad_bits.select = 0;
+					gb.direct.joypad &= ~JOYPAD_SELECT;
 					break;
 
 				case SDLK_z:
-					gb.direct.joypad_bits.a = 0;
+					gb.direct.joypad &= ~JOYPAD_A;
 					break;
 
 				case SDLK_x:
-					gb.direct.joypad_bits.b = 0;
+					gb.direct.joypad &= ~JOYPAD_B;
+					break;
+
+				case SDLK_a:
+					gb.direct.joypad ^= JOYPAD_A;
+					break;
+
+				case SDLK_s:
+					gb.direct.joypad ^= JOYPAD_B;
 					break;
 
 				case SDLK_UP:
-					gb.direct.joypad_bits.up = 0;
+					gb.direct.joypad &= ~JOYPAD_UP;
 					break;
 
 				case SDLK_RIGHT:
-					gb.direct.joypad_bits.right = 0;
+					gb.direct.joypad &= ~JOYPAD_RIGHT;
 					break;
 
 				case SDLK_DOWN:
-					gb.direct.joypad_bits.down = 0;
+					gb.direct.joypad &= ~JOYPAD_DOWN;
 					break;
 
 				case SDLK_LEFT:
-					gb.direct.joypad_bits.left = 0;
+					gb.direct.joypad &= ~JOYPAD_LEFT;
 					break;
 
 				case SDLK_SPACE:
@@ -1123,11 +1204,11 @@ int main(int argc, char **argv)
 #if ENABLE_LCD
 
 				case SDLK_i:
-					gb.direct.interlace = ~gb.direct.interlace;
+					gb.direct.interlace = !gb.direct.interlace;
 					break;
 
 				case SDLK_o:
-					gb.direct.frame_skip = ~gb.direct.frame_skip;
+					gb.direct.frame_skip = !gb.direct.frame_skip;
 					break;
 
 				case SDLK_b:
@@ -1165,35 +1246,43 @@ int main(int argc, char **argv)
 				switch(event.key.keysym.sym)
 				{
 				case SDLK_RETURN:
-					gb.direct.joypad_bits.start = 1;
+					gb.direct.joypad |= JOYPAD_START;
 					break;
 
 				case SDLK_BACKSPACE:
-					gb.direct.joypad_bits.select = 1;
+					gb.direct.joypad |= JOYPAD_SELECT;
 					break;
 
 				case SDLK_z:
-					gb.direct.joypad_bits.a = 1;
+					gb.direct.joypad |= JOYPAD_A;
 					break;
 
 				case SDLK_x:
-					gb.direct.joypad_bits.b = 1;
+					gb.direct.joypad |= JOYPAD_B;
+					break;
+
+				case SDLK_a:
+					gb.direct.joypad |= JOYPAD_A;
+					break;
+
+				case SDLK_s:
+					gb.direct.joypad |= JOYPAD_B;
 					break;
 
 				case SDLK_UP:
-					gb.direct.joypad_bits.up = 1;
+					gb.direct.joypad |= JOYPAD_UP;
 					break;
 
 				case SDLK_RIGHT:
-					gb.direct.joypad_bits.right = 1;
+					gb.direct.joypad |= JOYPAD_RIGHT;
 					break;
 
 				case SDLK_DOWN:
-					gb.direct.joypad_bits.down = 1;
+					gb.direct.joypad |= JOYPAD_DOWN;
 					break;
 
 				case SDLK_LEFT:
-					gb.direct.joypad_bits.left = 1;
+					gb.direct.joypad |= JOYPAD_LEFT;
 					break;
 
 				case SDLK_SPACE:
@@ -1337,7 +1426,7 @@ int main(int argc, char **argv)
 #endif
 					write_cart_ram_file(save_file_name,
 						&priv.cart_ram,
-						gb_get_save_size(&gb));
+						priv.save_size);
 #if ENABLE_SOUND_BLARGG
 					SDL_UnlockAudioDevice(dev);
 #endif
@@ -1367,7 +1456,7 @@ quit:
 #endif
 
 	/* Record save file. */
-	write_cart_ram_file(save_file_name, &priv.cart_ram, gb_get_save_size(&gb));
+	write_cart_ram_file(save_file_name, &priv.cart_ram, priv.save_size);
 
 out:
 	SDL_free(priv.rom);
