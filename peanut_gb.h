@@ -1416,7 +1416,10 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 			gb->cgb.BGPalette[(gb->cgb.BGPaletteID & 0x3F)] = val;
 			fixPaletteTemp = (gb->cgb.BGPalette[(gb->cgb.BGPaletteID & 0x3E) + 1] << 8) + (gb->cgb.BGPalette[(gb->cgb.BGPaletteID & 0x3E)]);
 			gb->cgb.fixPalette[((gb->cgb.BGPaletteID & 0x3E) >> 1)] = ((fixPaletteTemp & 0x7C00) >> 10) | (fixPaletteTemp & 0x03E0) | ((fixPaletteTemp & 0x001F) << 10);  // swap Red and Blue
-			if(gb->cgb.BGPaletteInc) gb->cgb.BGPaletteID = (++gb->cgb.BGPaletteID) & 0x3F;
+			if(gb->cgb.BGPaletteInc) {
+				gb->cgb.BGPaletteID++;
+				gb->cgb.BGPaletteID = (gb->cgb.BGPaletteID) & 0x3F;
+			}
 			return;
 
 		/* CGB OAM Palette Index*/
@@ -1430,7 +1433,10 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 			gb->cgb.OAMPalette[(gb->cgb.OAMPaletteID & 0x3F)] = val;
 			fixPaletteTemp = (gb->cgb.OAMPalette[(gb->cgb.OAMPaletteID & 0x3E) + 1] << 8) + (gb->cgb.OAMPalette[(gb->cgb.OAMPaletteID & 0x3E)]);
 			gb->cgb.fixPalette[0x20 + ((gb->cgb.OAMPaletteID & 0x3E) >> 1)] = ((fixPaletteTemp & 0x7C00) >> 10) | (fixPaletteTemp & 0x03E0) | ((fixPaletteTemp & 0x001F) << 10);  // swap Red and Blue
-			if(gb->cgb.OAMPaletteInc) gb->cgb.OAMPaletteID = (++gb->cgb.OAMPaletteID) & 0x3F;
+			if(gb->cgb.OAMPaletteInc) {
+				gb->cgb.OAMPaletteID++;
+				gb->cgb.OAMPaletteID = (gb->cgb.OAMPaletteID) & 0x3F;
+			}
 			return;
 
 		/* CGB WRAM Bank*/
@@ -2032,17 +2038,6 @@ void __gb_draw_line(struct gb_s *gb)
 				number_of_sprites++;
 			sprites_to_render[place] = current;
 		}
-#if PEANUT_FULL_GBC_SUPPORT
-		if(!gb->cgb.cgbMode)
-		{
-#endif
-		/* If maximum number of sprites reached, prioritise X
-		 * coordinate and object location in OAM. */
-		qsort(&sprites_to_render[0], number_of_sprites,
-				sizeof(sprites_to_render[0]), compare_sprites);
-#if PEANUT_FULL_GBC_SUPPORT
-		}
-#endif
 		if(number_of_sprites > MAX_SPRITES_LINE)
 			number_of_sprites = MAX_SPRITES_LINE;
 #endif
@@ -3820,11 +3815,14 @@ void __gb_step_cpu(struct gb_s *gb)
 
 		/* LCD Timing */
 #if PEANUT_FULL_GBC_SUPPORT
-        if (inst_cycles > 1)
+        if (inst_cycles > 1) {
             gb->counter.lcd_count += (inst_cycles >> gb->cgb.doubleSpeed);
-        else
+        } else {
 #endif
 		gb->counter.lcd_count += inst_cycles;
+#if PEANUT_FULL_GBC_SUPPORT
+	}
+#endif
 
 		/* New Scanline. HBlank -> VBlank or OAM Scan */
 		if(gb->counter.lcd_count >= LCD_LINE_CYCLES)
@@ -4074,10 +4072,10 @@ void gb_reset(struct gb_s *gb)
 		if(gb->cgb.cgbMode)
 		{
 			gb->cpu_reg.a = 0x11;
-			gb->cpu_reg.f_bits.z = 1;
-			gb->cpu_reg.f_bits.n = 0;
-			gb->cpu_reg.f_bits.h = hdr_chk;
-			gb->cpu_reg.f_bits.c = hdr_chk;
+			gb->cpu_reg.f.f_bits.z = 1;
+			gb->cpu_reg.f.f_bits.n = 0;
+			gb->cpu_reg.f.f_bits.h = hdr_chk;
+			gb->cpu_reg.f.f_bits.c = hdr_chk;
 			gb->cpu_reg.bc.reg = 0x0000;
 			gb->cpu_reg.de.reg = 0x0008;
 			gb->cpu_reg.hl.reg = 0x007C;
