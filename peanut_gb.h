@@ -833,7 +833,12 @@ uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
 		{
 			return gb->gb_bootrom_read(gb, addr);
 		}
-
+#if PEANUT_FULL_GBC_SUPPORT
+		else if (gb->cgb.cgbMode && gb->hram_io[IO_BOOT] == 0 && addr < 0x0900 && addr >= 0x0200)
+		{
+			return gb->gb_bootrom_read(gb, addr);
+		}
+#endif
 		/* Fallthrough */
 	case 0x1:
 	case 0x2:
